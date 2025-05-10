@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "backend"
+version = "0.1.0"
+description = ""
+authors = ["Nikola Vracevic"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+uvicorn = "^0.34.2"
+pydantic = "^2.11.4"
+mastodon-py = "^2.0.1"
+python-multipart = "^0.0.20"
+fastapi = "^0.115.12"
+
+
+[tool.poetry.group.dev.dependencies]
+uvicorn = "^0.34.2"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

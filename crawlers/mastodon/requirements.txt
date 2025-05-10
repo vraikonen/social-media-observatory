@@ -1,0 +1,5 @@
+mastodon.py==1.8.1
+pymongo==4.6.1
+python-dotenv==1.0.0
+retrying==1.3.4
+configparser==6.0.1 

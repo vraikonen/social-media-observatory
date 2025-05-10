@@ -1,0 +1,83 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+
+# === General ===
+.DS_Store
+*.log
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+.env
+.env.*
+*.env
+*.swp
+.vscode/
+.idea/
+
+# === Python / Poetry ===
+.poetry/
+dist/
+build/
+site/
+.eggs/
+*.egg-info/
+.mypy_cache/
+pytest_cache/
+.cache/
+.tox/
+.coverage
+coverage.xml
+htmlcov/
+
+# === FastAPI ===
+instance/
+*.db
+*.sqlite3
+
+# === Node / React / Vite ===
+node_modules/
+dist/
+build/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.vite/
+.vitest/
+
+# === Frontend Output ===
+*.tsbuildinfo
+
+# === OS Generated ===
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# === Local .venv or virtualenv ===
+.venv/
+venv/
