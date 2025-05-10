@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 function Authorization() {
   const [credentials, setCredentials] = useState({
-    api_base_url: '',
-    user_email: '',
-    user_pass: ''
+    client_id: '',
+    client_secret: '',
+    redirect_uri: '',
+    instance_domain: ''
   });
 
   const [token, setToken] = useState(localStorage.getItem('mastodon_token') || '');
@@ -18,6 +19,82 @@ function Authorization() {
     facebook: { status: 'unknown', message: 'Not checked' }
   });
 
+  // Check for OAuth callback
+  useEffect(() => {
+    const handleCallback = async () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const code = urlParams.get('code');
+      const state = urlParams.get('state');
+      
+      if (code && state) {
+        // Verify state to prevent CSRF
+        const storedState = sessionStorage.getItem('mastodon_oauth_state');
+        if (state !== storedState) {
+          setError('Invalid state parameter. Possible CSRF attack.');
+          setCrawlerStatus(prev => ({
+            ...prev,
+            mastodon: { status: 'error', message: 'Authentication failed' }
+          }));
+          return;
+        }
+
+        // Get stored credentials
+        const storedCredentials = sessionStorage.getItem('mastodon_oauth_credentials');
+        if (!storedCredentials) {
+          setError('No stored credentials found. Please try authorizing again.');
+          return;
+        }
+
+        const credentials = JSON.parse(storedCredentials);
+        
+        try {
+          const response = await fetch('http://localhost:8000/auth/mastodon/callback', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              code,
+              state,
+              credentials
+            }),
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || 'Failed to exchange code for token');
+          }
+
+          const data = await response.json();
+          // Store token and clear credentials
+          sessionStorage.setItem('mastodon_token', data.token);
+          sessionStorage.removeItem('mastodon_oauth_credentials');
+          setToken(data.token);
+          setError(null);
+          setHasChecked(false);
+          setCrawlerStatus(prev => ({
+            ...prev,
+            mastodon: { status: 'success', message: 'Authorized' }
+          }));
+          
+          // Clean up URL and session storage
+          window.history.replaceState({}, document.title, window.location.pathname);
+          sessionStorage.removeItem('mastodon_oauth_state');
+        } catch (err) {
+          setError(err.message);
+          setCrawlerStatus(prev => ({
+            ...prev,
+            mastodon: { status: 'error', message: 'Authentication failed' }
+          }));
+        } finally {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    handleCallback();
+  }, []);
+
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setCredentials(prev => ({
@@ -27,6 +104,7 @@ function Authorization() {
   };
 
   const checkToken = async () => {
+    const token = sessionStorage.getItem('mastodon_token');
     if (!token) {
       setHasChecked(true);
       setCrawlerStatus(prev => ({
@@ -47,8 +125,7 @@ function Authorization() {
           mastodon: { status: 'success', message: 'Authorized' }
         }));
       } else {
-        localStorage.removeItem('mastodon_token');
-        setToken('');
+        sessionStorage.removeItem('mastodon_token');
         setHasChecked(true);
         setCrawlerStatus(prev => ({
           ...prev,
@@ -67,39 +144,34 @@ function Authorization() {
     }
   };
 
-  const handleSubmit = async (e) => {
+  const handleOAuthSubmit = async (e) => {
     e.preventDefault();
     setIsLoading(true);
     setError('');
 
     try {
-      const response = await fetch('http://localhost:8000/auth/mastodon/authorize', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(credentials),
-      });
-
-      if (!response.ok) {
-        throw new Error('Authentication failed');
-      }
-
-      const data = await response.json();
-      setToken(data.token);
-      localStorage.setItem('mastodon_token', data.token);
-      setHasChecked(false);
-      setCrawlerStatus(prev => ({
-        ...prev,
-        mastodon: { status: 'success', message: 'Authorized' }
-      }));
+      // Generate a random state string for CSRF protection
+      const state = Math.random().toString(36).substring(2);
+      
+      // Store credentials and state in session storage
+      sessionStorage.setItem('mastodon_oauth_credentials', JSON.stringify(credentials));
+      sessionStorage.setItem('mastodon_oauth_state', state);
+      
+      // Redirect to Mastodon OAuth page
+      const authUrl = `https://${credentials.instance_domain}/oauth/authorize?` + 
+        `client_id=${encodeURIComponent(credentials.client_id)}&` +
+        `redirect_uri=${encodeURIComponent(credentials.redirect_uri)}&` +
+        'response_type=code&' +
+        'scope=read&' +
+        `state=${encodeURIComponent(state)}`;
+      
+      window.location.href = authUrl;
     } catch (err) {
-      setError(err.message || 'Failed to authenticate');
+      setError(err.message || 'Failed to start authentication');
       setCrawlerStatus(prev => ({
         ...prev,
         mastodon: { status: 'error', message: 'Authentication failed' }
       }));
-    } finally {
       setIsLoading(false);
     }
   };
@@ -117,60 +189,26 @@ function Authorization() {
 
   return (
     <div className="authorization-container">
-      <h2>Authorization</h2>
-      
       <div className="status-table">
-        <h3>Authorization Status</h3>
+        <h2>Authorization Status</h2>
         <table>
           <thead>
             <tr>
+              <th>Crawler</th>
               <th>Status</th>
-              <th>Mastodon</th>
-              <th>Twitter</th>
-              <th>Facebook</th>
             </tr>
           </thead>
           <tbody>
-            <tr>
-              <td>Status</td>
-              <td>
-                <span 
-                  className="status-indicator"
-                  style={{ backgroundColor: getStatusColor(crawlerStatus.mastodon.status) }}
-                />
-                {crawlerStatus.mastodon.message}
-              </td>
-              <td>
-                <span 
-                  className="status-indicator"
-                  style={{ backgroundColor: getStatusColor(crawlerStatus.twitter.status) }}
-                />
-                {crawlerStatus.twitter.message}
-              </td>
-              <td>
-                <span 
-                  className="status-indicator"
-                  style={{ backgroundColor: getStatusColor(crawlerStatus.facebook.status) }}
-                />
-                {crawlerStatus.facebook.message}
-              </td>
-            </tr>
+            {Object.entries(crawlerStatus).map(([crawler, { status, message }]) => (
+              <tr key={crawler}>
+                <td>{crawler}</td>
+                <td style={{ color: getStatusColor(status) }}>
+                  {message}
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
-      </div>
-
-      <div className="crawler-selector">
-        <label htmlFor="crawler-select">Select Crawler:</label>
-        <select 
-          id="crawler-select"
-          value={selectedCrawler}
-          onChange={(e) => setSelectedCrawler(e.target.value)}
-          className="crawler-select"
-        >
-          <option value="mastodon">Mastodon</option>
-          <option value="twitter" disabled>Twitter (Coming Soon)</option>
-          <option value="facebook" disabled>Facebook (Coming Soon)</option>
-        </select>
       </div>
 
       {!hasChecked ? (
@@ -186,75 +224,68 @@ function Authorization() {
       ) : (
         <div className="credentials-section">
           <div className="message">
-            <p>No valid Mastodon token found. Please enter your credentials below:</p>
+            <p>No valid Mastodon token found. Please enter your OAuth credentials below:</p>
           </div>
 
-          <form onSubmit={handleSubmit} className="credentials-form">
+          <form onSubmit={handleOAuthSubmit} className="credentials-form">
             <div className="form-group">
-              <label htmlFor="api_base_url">Mastodon Instance URL:</label>
+              <label htmlFor="instance_domain">Instance Domain:</label>
               <input
                 type="text"
-                id="api_base_url"
-                name="api_base_url"
-                value={credentials.api_base_url}
+                id="instance_domain"
+                name="instance_domain"
+                value={credentials.instance_domain}
                 onChange={handleInputChange}
-                placeholder="https://mastodon.social"
+                placeholder="mastodon.social"
                 required
               />
-              <small className="help-text">Enter your Mastodon instance URL (e.g., https://mastodon.social)</small>
+              <small className="help-text">Enter your Mastodon instance domain (e.g., mastodon.social)</small>
             </div>
 
             <div className="form-group">
-              <label htmlFor="user_email">Email:</label>
+              <label htmlFor="client_id">Client ID:</label>
               <input
-                type="email"
-                id="user_email"
-                name="user_email"
-                value={credentials.user_email}
+                type="text"
+                id="client_id"
+                name="client_id"
+                value={credentials.client_id}
                 onChange={handleInputChange}
-                placeholder="your.email@example.com"
                 required
               />
             </div>
 
             <div className="form-group">
-              <label htmlFor="user_pass">Password:</label>
+              <label htmlFor="client_secret">Client Secret:</label>
               <input
                 type="password"
-                id="user_pass"
-                name="user_pass"
-                value={credentials.user_pass}
+                id="client_secret"
+                name="client_secret"
+                value={credentials.client_secret}
                 onChange={handleInputChange}
-                placeholder="••••••••"
                 required
               />
             </div>
 
-            {error && <div className="error-message">{error}</div>}
-
-            <div className="form-actions">
-              <button 
-                type="submit" 
-                className="save-button"
-                disabled={isLoading}
-              >
-                {isLoading ? 'Authenticating...' : 'Save Credentials'}
-              </button>
+            <div className="form-group">
+              <label htmlFor="redirect_uri">Redirect URI:</label>
+              <input
+                type="text"
+                id="redirect_uri"
+                name="redirect_uri"
+                value={credentials.redirect_uri}
+                onChange={handleInputChange}
+                placeholder="http://localhost:3000/callback"
+                required
+              />
+              <small className="help-text">The URI where Mastodon will redirect after authentication</small>
             </div>
+
+            <button type="submit" className="submit-button" disabled={isLoading}>
+              {isLoading ? 'Authorizing...' : 'Authorize with Mastodon'}
+            </button>
           </form>
 
-          <div className="documentation-link">
-            <p>
-              Need help? Check out the{' '}
-              <a 
-                href="https://docs.joinmastodon.org/api/" 
-                target="_blank" 
-                rel="noopener noreferrer"
-              >
-                official Mastodon API documentation
-              </a>
-            </p>
-          </div>
+          {error && <div className="error-message">{error}</div>}
         </div>
       )}
     </div>

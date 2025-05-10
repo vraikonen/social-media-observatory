@@ -1,24 +1,31 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 from typing import Optional
 from mastodon import Mastodon
 import os
 import json
 from datetime import datetime, timedelta
+import requests
+from urllib.parse import urlparse
 
 router = APIRouter()
 
 # In-memory token storage (replace with proper storage in production)
 TOKEN_STORAGE = {}
 
-class MastodonCredentials(BaseModel):
-    api_base_url: str
-    user_email: str
-    user_pass: str
+class OAuthCredentials(BaseModel):
+    client_id: str
+    client_secret: str
+    redirect_uri: str
+    instance_domain: str
 
 class TokenResponse(BaseModel):
     token: str
-    expires_at: datetime
+
+class CallbackRequest(BaseModel):
+    code: str
+    state: str
+    credentials: OAuthCredentials
 
 def get_token_storage_path():
     """Get the path to store tokens"""
@@ -47,14 +54,9 @@ def token_is_valid(token: str) -> bool:
         if token not in tokens:
             return False
 
-        # Get token info
-        token_info = tokens[token]
-        if datetime.fromisoformat(token_info["expires_at"]) < datetime.now():
-            return False
-
         # Try to make a simple API call
         mastodon = Mastodon(
-            api_base_url=token_info["api_base_url"],
+            api_base_url=f"https://{tokens[token]['instance_domain']}",
             access_token=token
         )
         # Try to get account info as a simple test
@@ -63,55 +65,57 @@ def token_is_valid(token: str) -> bool:
     except Exception:
         return False
 
-def request_token_from_mastodon(credentials: MastodonCredentials) -> str:
-    """Request a new token from Mastodon"""
+@router.post("/mastodon/callback")
+async def oauth_callback(request: CallbackRequest):
+    """Handle OAuth callback and exchange code for token"""
     try:
-        # Create app if it doesn't exist
-        app_name = "social_media_observatory"
-        client_id_file = os.path.join(os.path.dirname(__file__), "..", "storage", f"{app_name}_clientcred.secret")
-        user_token_file = os.path.join(os.path.dirname(__file__), "..", "storage", f"{app_name}_usercred.secret")
-
-        # Create app
-        Mastodon.create_app(
-            app_name,
-            api_base_url=credentials.api_base_url,
-            to_file=client_id_file
-        )
-
-        # Log in
-        mastodon = Mastodon(client_id=client_id_file)
-        mastodon.log_in(
-            credentials.user_email,
-            credentials.user_pass,
-            to_file=user_token_file
-        )
-
-        # Get access token
-        with open(user_token_file, "r") as f:
-            token = f.read().strip()
-
+        print(f"Received code: {request.code}")  # Debug log
+        print(f"Received credentials for instance: {request.credentials.instance_domain}")  # Debug log
+        
+        # Exchange code for token
+        token_url = f"https://{request.credentials.instance_domain}/oauth/token"
+        token_data = {
+            'client_id': request.credentials.client_id,
+            'client_secret': request.credentials.client_secret,
+            'code': request.code,
+            'redirect_uri': request.credentials.redirect_uri,
+            'grant_type': 'authorization_code'
+        }
+        
+        print(f"Making token request to: {token_url}")  # Debug log
+        print(f"Redirect URI: {request.credentials.redirect_uri}")
+        response = requests.post(token_url, data=token_data)
+        
+        if not response.ok:
+            error_data = response.json()
+            print(f"Token request failed: {error_data}")  # Debug log
+            
+            # If we get an invalid_grant error, check if we already have a token
+            if error_data.get('error') == 'invalid_grant':
+                # Try to get the existing token from storage
+                tokens = load_tokens()
+                # Find token for this instance
+                for token, info in tokens.items():
+                    if info['instance_domain'] == request.credentials.instance_domain:
+                        print("Found existing token for this instance")  # Debug log
+                        return TokenResponse(token=token)
+            
+            raise HTTPException(status_code=401, detail="Failed to exchange code for token")
+        
+        token_info = response.json()
+        access_token = token_info['access_token']
+        
         # Store token info
         tokens = load_tokens()
-        tokens[token] = {
-            "api_base_url": credentials.api_base_url,
-            "user_email": credentials.user_email,
-            "expires_at": (datetime.now() + timedelta(days=30)).isoformat()  # Tokens typically last 30 days
+        tokens[access_token] = {
+            'instance_domain': request.credentials.instance_domain
         }
         save_tokens(tokens)
-
-        return token
+        
+        return TokenResponse(token=access_token)
     except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Failed to authenticate with Mastodon: {str(e)}")
-
-@router.post("/mastodon/authorize", response_model=TokenResponse)
-async def authorize(credentials: MastodonCredentials):
-    """Authorize with Mastodon and get a token"""
-    token = request_token_from_mastodon(credentials)
-    tokens = load_tokens()
-    return TokenResponse(
-        token=token,
-        expires_at=datetime.fromisoformat(tokens[token]["expires_at"])
-    )
+        print(f"Error in callback: {str(e)}")  # Debug log
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/mastodon/check")
 async def check_token(token: str):

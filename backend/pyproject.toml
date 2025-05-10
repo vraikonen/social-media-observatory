@@ -12,6 +12,8 @@ pydantic = "^2.11.4"
 mastodon-py = "^2.0.1"
 python-multipart = "^0.0.20"
 fastapi = "^0.115.12"
+starlette = "^0.46.2"
+itsdangerous = "^2.2.0"
 
 
 [tool.poetry.group.dev.dependencies]
